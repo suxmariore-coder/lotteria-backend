@@ -1,95 +1,106 @@
-const express = require("express");
-const cors = require("cors");
-const { Pool } = require("pg");
+import express from "express";
+import cors from "cors";
+import pg from "pg";
 
 const app = express();
 app.use(cors());
 app.use(express.json());
 
-// Configura qui il tuo DATABASE_URL su Render
-const pool = new Pool({
-    connectionString: process.env.DATABASE_URL,
-    ssl: { rejectUnauthorized: false }
+const pool = new pg.Pool({
+  connectionString: process.env.DATABASE_URL,
+  ssl: { rejectUnauthorized: false }
 });
 
-// Creazione tabella numeri se non esiste
-(async () => {
-    await pool.query(`
-        CREATE TABLE IF NOT EXISTS numeri (
-            numero INT PRIMARY KEY,
-            acquistato BOOLEAN DEFAULT FALSE,
-            nome_acquirente TEXT
-        )
-    `);
+app.get("/", (req, res) => {
+  res.send("Backend Lotteria ONLINE ✔");
+});
 
-    // Inserisci i numeri da 1 a 90 se non ci sono
-    for (let i = 1; i <= 90; i++) {
-        await pool.query(
-            `INSERT INTO numeri (numero) VALUES ($1)
-            ON CONFLICT (numero) DO NOTHING`,
-            [i]
-        );
-    }
-})();
-
-// ------------------- ENDPOINT -------------------
-
-// Recupera tutti i numeri
+/* ================================
+   GET NUMERI
+================================ */
 app.get("/numbers", async (req, res) => {
-    try {
-        const result = await pool.query("SELECT * FROM numeri ORDER BY numero ASC");
-        res.json(result.rows);
-    } catch (err) {
-        console.error(err);
-        res.status(500).json({ error: "Errore recupero numeri" });
-    }
+  console.log("📥 Richiesta GET /numbers");
+
+  try {
+    const result = await pool.query("SELECT * FROM numeri ORDER BY numero ASC");
+    console.log("📤 Dati inviati al frontend:", result.rows.length, "righe");
+
+    res.json(result.rows);
+  } catch (err) {
+    console.error("❌ ERRORE GET /numbers:", err);
+    res.status(500).json({ error: "Errore server" });
+  }
 });
 
-// Conferma acquisto numero
+/* ================================
+   POST CONFERMA ACQUISTO
+================================ */
 app.post("/confirm", async (req, res) => {
-    const { numero, nome } = req.body;
-    if (!numero || !nome) return res.status(400).json({ error: "Dati mancanti" });
+  console.log("====================================");
+  console.log("📥 RICHIESTA POST /confirm");
+  console.log("Body ricevuto:", req.body);
 
-    try {
-        await pool.query(
-            "UPDATE numeri SET acquistato=true, nome_acquirente=$2 WHERE numero=$1",
-            [numero, nome]
-        );
-        res.json({ message: `Numero ${numero} acquistato da ${nome}` });
-    } catch (err) {
-        console.error(err);
-        res.status(500).json({ error: "Errore conferma acquisto" });
+  const { numero, nome_acquirente } = req.body;
+
+  if (!numero || !nome_acquirente) {
+    console.log("❌ ERRORE: numero o nome_acquirente MANCANTI");
+    return res.status(400).json({ error: "Dati mancanti" });
+  }
+
+  console.log("➡ Sto aggiornando numero:", numero, "con nome:", nome_acquirente);
+
+  try {
+    const result = await pool.query(
+      "UPDATE numeri SET acquistato = true, nome_acquirente = $1 WHERE numero = $2 RETURNING *",
+      [nome_acquirente, numero]
+    );
+
+    console.log("Risultato UPDATE:", result.rows);
+
+    if (result.rowCount === 0) {
+      console.log("⚠ Nessun numero aggiornato. Numero inesistente:", numero);
+      return res.status(400).json({ error: "Numero non trovato" });
     }
+
+    console.log("✔ ACQUISTO REGISTRATO CORRETTAMENTE");
+    res.json({ success: true, numero });
+  } catch (err) {
+    console.error("❌ ERRORE SQL DURANTE UPDATE:", err);
+    res.status(500).json({ error: "Errore interno durante conferma" });
+  }
 });
 
-// Reset totale griglia
+/* ================================
+   RESET DI UN NUMERO
+================================ */
 app.post("/reset", async (req, res) => {
-    try {
-        await pool.query("UPDATE numeri SET acquistato=false, nome_acquirente=NULL");
-        res.json({ message: "Griglia resettata" });
-    } catch (err) {
-        console.error(err);
-        res.status(500).json({ error: "Errore reset griglia" });
+  const { numero } = req.body;
+
+  console.log("♻ Richiesta reset numero:", numero);
+
+  try {
+    const result = await pool.query(
+      "UPDATE numeri SET acquistato = false, nome_acquirente = NULL WHERE numero = $1 RETURNING *",
+      [numero]
+    );
+
+    if (result.rowCount === 0) {
+      console.log("⚠ Numero non trovato:", numero);
+      return res.status(400).json({ error: "Numero inesistente" });
     }
+
+    console.log("✔ Numero resettato:", numero);
+    res.json({ success: true });
+  } catch (err) {
+    console.error("❌ Errore reset:", err);
+    res.status(500).json({ error: "Errore reset" });
+  }
 });
 
-// Reset singolo numero
-app.post("/reset/:numero", async (req, res) => {
-    const numero = parseInt(req.params.numero);
-    if (!numero) return res.status(400).json({ error: "Numero mancante" });
-
-    try {
-        await pool.query(
-            "UPDATE numeri SET acquistato=false, nome_acquirente=NULL WHERE numero=$1",
-            [numero]
-        );
-        res.json({ message: `Numero ${numero} resettato` });
-    } catch (err) {
-        console.error(err);
-        res.status(500).json({ error: "Errore reset numero" });
-    }
-});
-
-// Avvio server
+/* ================================
+   AVVIO SERVER
+================================ */
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => console.log(`Server avviato su port ${PORT}`));
+app.listen(PORT, () => {
+  console.log("🚀 SERVER AVVIATO sulla porta", PORT);
+});
